@@ -121,14 +121,17 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         weekdays,
         startDate,
         endDate: endDate || undefined,
-        enabled: true,
+        enabled: initialSchedule ? initialSchedule.enabled : true,
       };
 
       await db.medicines.put(medicineRecord);
       await db.medicationSchedules.put(scheduleRecord);
 
-      // Immediately sync today's alarms so it reflects on the dashboard
+      // Single source of truth synchronization: sync today and start date
       await syncAlarmsForDate(todayStr);
+      if (startDate && startDate !== todayStr) {
+        await syncAlarmsForDate(startDate);
+      }
 
       onSaved();
       onClose();
@@ -260,7 +263,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                   onClick={() => setScheduleType(item.type as ScheduleType)}
                   className={`py-2 px-2.5 rounded-xl text-xs font-bold transition text-center cursor-pointer ${
                     scheduleType === item.type
-                      ? 'bg-teal-700 text-white shadow-sm'
+                      ? 'bg-teal-700 text-white shadow-xs'
                       : 'bg-white border border-teal-200 text-teal-800 hover:bg-teal-100/50'
                   }`}
                 >
@@ -413,7 +416,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                 type="file"
                 accept="image/*"
                 onChange={handleImageChange}
-                className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100"
+                className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer"
               />
               {image && (
                 <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-slate-300 shrink-0">

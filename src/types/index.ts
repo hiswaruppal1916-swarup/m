@@ -34,8 +34,10 @@ export type MealStatus =
 export type AlarmStatus = 
   | 'pending' 
   | 'due' 
+  | 'ringing'
   | 'taken' 
   | 'snoozed' 
+  | 'stopped'
   | 'skipped' 
   | 'missed';
 
@@ -46,6 +48,28 @@ export type TriggerType =
   | 'snooze';
 
 export type LogStatus = 'taken' | 'skipped' | 'missed';
+
+export type AlertMode = 'alarm_sound' | 'voice_reminder' | 'alarm_and_voice';
+
+export type BuiltInAlarmTone = 
+  | 'gentle_chime'
+  | 'classic_alarm'
+  | 'digital_alarm'
+  | 'bell_alarm'
+  | 'loud_alarm'
+  | 'soft_reminder'
+  | 'morning_alarm'
+  | 'traditional_alarm';
+
+export interface CustomAudioTrack {
+  id: string;
+  name: string;
+  blob: Blob;
+  mimeType: string;
+  size: number;
+  duration?: number;
+  createdAt: string;
+}
 
 export interface Medicine {
   id: string;
@@ -122,17 +146,25 @@ export interface MedicationLog {
 export interface UserSettings {
   id: string;
   language: 'en' | 'bn';
+  alertMode: AlertMode;
+  alarmTone: BuiltInAlarmTone | string; // key of built-in tone or 'custom:' + id
+  customToneId?: string;
   voiceEnabled: boolean;
   voiceLang: 'en' | 'bn';
+  voiceVoiceURI?: string;
   voiceSpeed: number; // 0.8 - 1.2
   soundVolume: number; // 0.1 - 1.0
-  alarmSound: 'gentle_chime' | 'medical_beep' | 'zen_bell';
+  alarmSound: 'gentle_chime' | 'medical_beep' | 'zen_bell'; // kept for backward compatibility
   highContrast: boolean;
   caregiverModeEnabled: boolean;
   caregiverName?: string;
   caregiverContact?: string;
   patientName?: string;
   onboardingCompleted: boolean;
+  snoozeDurationMinutes: number;
+  notificationsEnabled: boolean;
+  notificationPrivacy: 'full' | 'discrete';
+  lastSyncTimestamp?: string;
 }
 
 export interface AdherenceStats {
@@ -141,6 +173,6 @@ export interface AdherenceStats {
   missed: number;
   skipped: number;
   pending: number;
-  adherencePercentage: number;
+  adherencePercentage: number | null; // null if 0 eligible doses (displays as N/A)
   streakDays: number;
 }

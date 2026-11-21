@@ -6,7 +6,8 @@ import type {
   MedicationSchedule, 
   AlarmInstance, 
   MedicationLog, 
-  UserSettings 
+  UserSettings,
+  CustomAudioTrack
 } from '../types';
 
 export class MediTimeDB extends Dexie {
@@ -17,6 +18,7 @@ export class MediTimeDB extends Dexie {
   alarmInstances!: EntityTable<AlarmInstance, 'id'>;
   medicationLogs!: EntityTable<MedicationLog, 'id'>;
   settings!: EntityTable<UserSettings, 'id'>;
+  customAudio!: EntityTable<CustomAudioTrack, 'id'>;
 
   constructor() {
     super('MediTimeDB');
@@ -28,6 +30,9 @@ export class MediTimeDB extends Dexie {
       alarmInstances: 'id, date, medicineId, scheduleId, [date+medicineId], status, scheduledTime',
       medicationLogs: 'id, medicineId, alarmInstanceId, scheduledTime, status, actualTakenTime',
       settings: 'id'
+    });
+    this.version(2).stores({
+      customAudio: 'id, name, createdAt'
     });
   }
 }
@@ -45,15 +50,21 @@ export const DEFAULT_MEALS: Meal[] = [
 export const DEFAULT_SETTINGS: UserSettings = {
   id: 'current_user',
   language: 'en',
+  alertMode: 'alarm_and_voice',
+  alarmTone: 'gentle_chime',
+  alarmSound: 'gentle_chime',
   voiceEnabled: true,
   voiceLang: 'en',
   voiceSpeed: 1.0,
   soundVolume: 0.8,
-  alarmSound: 'gentle_chime',
   highContrast: false,
   caregiverModeEnabled: false,
   patientName: 'Care Recipient',
   onboardingCompleted: false,
+  snoozeDurationMinutes: 10,
+  notificationsEnabled: true,
+  notificationPrivacy: 'full',
+  lastSyncTimestamp: new Date().toISOString()
 };
 
 /**
@@ -68,6 +79,19 @@ export async function initializeDatabase(): Promise<void> {
   const settings = await db.settings.get('current_user');
   if (!settings) {
     await db.settings.add(DEFAULT_SETTINGS);
+  } else {
+    // Migrate missing keys if settings already existed from version 1
+    const missingKeys: Partial<UserSettings> = {};
+    if (!settings.alertMode) missingKeys.alertMode = 'alarm_and_voice';
+    if (!settings.alarmTone) missingKeys.alarmTone = settings.alarmSound || 'gentle_chime';
+    if (typeof settings.snoozeDurationMinutes !== 'number') missingKeys.snoozeDurationMinutes = 10;
+    if (typeof settings.notificationsEnabled !== 'boolean') missingKeys.notificationsEnabled = true;
+    if (!settings.notificationPrivacy) missingKeys.notificationPrivacy = 'full';
+    if (!settings.lastSyncTimestamp) missingKeys.lastSyncTimestamp = new Date().toISOString();
+
+    if (Object.keys(missingKeys).length > 0) {
+      await db.settings.update('current_user', missingKeys);
+    }
   }
 }
 

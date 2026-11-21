@@ -21,7 +21,7 @@ export function formatLocalDate(d: Date = new Date()): string {
 /**
  * Format Date to HH:mm (24-hour local format)
  */
-export function formatLocalTime(d: Date): string {
+export function formatLocalTime(d: Date = new Date()): string {
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
@@ -34,7 +34,7 @@ export function formatFriendlyTime(timeStr: string | Date): string {
   const d = typeof timeStr === 'string' ? new Date(timeStr) : timeStr;
   if (isNaN(d.getTime())) {
     // If it's a HH:mm string like "08:30"
-    if (typeof timeStr === 'string' && /^\d{2}:\d{2}$/.test(timeStr)) {
+    if (typeof timeStr === 'string' && /^\d{1,2}:\d{2}$/.test(timeStr)) {
       const [h, m] = timeStr.split(':').map(Number);
       const period = h >= 12 ? 'PM' : 'AM';
       const hours12 = h % 12 || 12;
@@ -112,16 +112,22 @@ export function calculateScheduleTime(
 /**
  * Generate or reconcile alarm instances for a given date in IndexedDB.
  * Prevents duplicates. Respects active weekdays, start/end dates, and existing logs.
+ * CRITICAL FIX: Loads all medicines and schedules and filters by boolean truthiness,
+ * preventing IndexedDB boolean-vs-integer key mismatch bugs.
  */
 export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Promise<AlarmInstance[]> {
-  const [medicines, schedules, meals, mealLogs, existingAlarms, logs] = await Promise.all([
-    db.medicines.where('active').equals(1).toArray(),
-    db.medicationSchedules.where('enabled').equals(1).toArray(),
+  const [allMedicines, allSchedules, meals, mealLogs, existingAlarms, logs] = await Promise.all([
+    db.medicines.toArray(),
+    db.medicationSchedules.toArray(),
     db.meals.toArray(),
     db.mealLogs.where('date').equals(dateStr).toArray(),
     db.alarmInstances.where('date').equals(dateStr).toArray(),
     db.medicationLogs.toArray()
   ]);
+
+  // Safe boolean filtering regardless of storage representation (boolean true vs 1)
+  const medicines = allMedicines.filter(m => Boolean(m.active) === true);
+  const schedules = allSchedules.filter(s => Boolean(s.enabled) === true);
 
   const mealMap = new Map<string, Meal>(meals.map(m => [m.id, m]));
   const mealLogMap = new Map<string, MealLog>(mealLogs.map(ml => [ml.mealId, ml]));
@@ -132,10 +138,13 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
     logs.filter(l => l.alarmInstanceId).map(l => [l.alarmInstanceId!, l])
   );
 
-  const targetDateObj = new Date(dateStr + 'T00:00:00');
+  // Timezone-safe local weekday calculation
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const targetDateObj = new Date(year, month - 1, day);
   const dayOfWeek = targetDateObj.getDay(); // 0 = Sun
   const now = new Date();
   const gracePeriodMs = 45 * 60 * 1000; // 45 minutes grace before marking missed
+  const todayStr = formatLocalDate(now);
 
   const alarmsToPut: AlarmInstance[] = [];
 
@@ -143,12 +152,12 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
     const med = medicines.find(m => m.id === schedule.medicineId);
     if (!med || !med.active) continue;
 
-    // Check weekday filter
-    if (schedule.weekdays && !schedule.weekdays.includes(dayOfWeek)) {
+    // Check weekday filter (default to all days if empty)
+    if (schedule.weekdays && schedule.weekdays.length > 0 && !schedule.weekdays.includes(dayOfWeek)) {
       continue;
     }
 
-    // Check date ranges
+    // Check date ranges (inclusive)
     if (schedule.startDate && dateStr < schedule.startDate) continue;
     if (schedule.endDate && dateStr > schedule.endDate) continue;
     if (med.startDate && dateStr < med.startDate) continue;
@@ -187,7 +196,7 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
 
       // Check due vs pending vs missed
       const scheduledTimeMs = new Date(existing.scheduledTime).getTime();
-      const isToday = dateStr === formatLocalDate();
+      const isToday = dateStr === todayStr;
 
       if (isToday) {
         if (now.getTime() >= scheduledTimeMs && now.getTime() <= scheduledTimeMs + gracePeriodMs) {
@@ -198,7 +207,7 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
         } else {
           existing.status = 'pending';
         }
-      } else if (dateStr < formatLocalDate()) {
+      } else if (dateStr < todayStr) {
         // Past days: if not taken/skipped, it was missed
         existing.status = 'missed';
       } else {
@@ -210,7 +219,7 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
       alarmsToPut.push(existing);
     } else {
       // Create fresh instance
-      const isToday = dateStr === formatLocalDate();
+      const isToday = dateStr === todayStr;
       const scheduledTimeMs = computedDate.getTime();
       let status: AlarmInstance['status'] = 'pending';
 
@@ -220,7 +229,7 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
         } else if (now.getTime() > scheduledTimeMs + gracePeriodMs) {
           status = 'missed';
         }
-      } else if (dateStr < formatLocalDate()) {
+      } else if (dateStr < todayStr) {
         status = 'missed';
       }
 
@@ -244,6 +253,13 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
 
   if (alarmsToPut.length > 0) {
     await db.alarmInstances.bulkPut(alarmsToPut);
+  }
+
+  // Update last synchronization timestamp in settings
+  try {
+    await db.settings.update('current_user', { lastSyncTimestamp: new Date().toISOString() });
+  } catch {
+    // Ignore if settings not yet seeded
   }
 
   return await db.alarmInstances.where('date').equals(dateStr).toArray();
@@ -281,11 +297,14 @@ export async function confirmMealCompleted(
   await db.mealLogs.put(mealLog);
 
   // 3. Find affected schedules
-  const afterMealSchedules = await db.medicationSchedules
+  const allAfterMealSchedules = await db.medicationSchedules
     .where('scheduleType')
     .equals('after_meal')
-    .filter(s => s.mealId === mealId && s.enabled)
     .toArray();
+  
+  const afterMealSchedules = allAfterMealSchedules.filter(
+    s => s.mealId === mealId && Boolean(s.enabled)
+  );
 
   const updatedMedicines: { name: string; dosage: string; oldTime?: string; newTime: string }[] = [];
 
@@ -340,11 +359,12 @@ export async function confirmMealCompleted(
 }
 
 /**
- * Record a medicine dose action: Taken, Snooze, or Skip
+ * Record a medicine dose action: Taken, Snooze, Skip, or Stop (Dismiss)
+ * Note: Stop simply dismisses active audio while preserving dose as pending!
  */
 export async function recordDoseAction(
   alarmId: string,
-  action: 'taken' | 'snooze' | 'skip',
+  action: 'taken' | 'snooze' | 'skip' | 'stop',
   snoozeMinutes: number = 10,
   notes?: string
 ): Promise<void> {
@@ -389,6 +409,12 @@ export async function recordDoseAction(
     alarm.snoozeUntil = snoozeUntil.toISOString();
     alarm.updatedAt = now.toISOString();
     await db.alarmInstances.put(alarm);
+  } else if (action === 'stop') {
+    // STOP ALARM: Dismisses active alarm UI but strictly keeps dose pending!
+    // NEVER mark as taken or skipped!
+    alarm.status = 'pending';
+    alarm.updatedAt = now.toISOString();
+    await db.alarmInstances.put(alarm);
   }
 }
 
@@ -420,7 +446,36 @@ export async function correctDoseLog(
 }
 
 /**
- * Calculate adherence statistics
+ * Mathematical adherence percentage calculation:
+ * Formula: Adherence Percentage = (Taken / (Taken + Missed + Skipped)) * 100
+ * If Total Eligible Doses === 0: returns null (representing N/A).
+ * Pending and future doses must NOT be counted as completed or missed!
+ */
+export function calculateAdherence(taken: number, missed: number, skipped: number): {
+  totalEligible: number;
+  adherencePercentage: number | null;
+  displayPercentage: string;
+} {
+  const totalEligible = taken + missed + skipped;
+  if (totalEligible === 0) {
+    return {
+      totalEligible: 0,
+      adherencePercentage: null,
+      displayPercentage: 'N/A'
+    };
+  }
+  const pct = Math.round((taken / totalEligible) * 100);
+  return {
+    totalEligible,
+    adherencePercentage: pct,
+    displayPercentage: `${pct}%`
+  };
+}
+
+/**
+ * Calculate adherence statistics across a date range.
+ * Transparent formula: eligible doses = taken + missed + skipped.
+ * Returns adherencePercentage = null if eligible doses === 0 (displays N/A).
  */
 export async function calculateAdherenceStats(
   startDateStr?: string,
@@ -457,12 +512,9 @@ export async function calculateAdherenceStats(
     }
   }
 
-  const finishedCount = taken + missed + skipped;
-  const adherencePercentage = finishedCount > 0 
-    ? Math.round((taken / finishedCount) * 100) 
-    : 100;
+  const { adherencePercentage } = calculateAdherence(taken, missed, skipped);
 
-  // Streak calculation: past 7 days where adherence >= 80%
+  // Streak calculation: past consecutive days where adherence >= 80%
   let streakDays = 0;
   const testDate = new Date();
   for (let i = 0; i < 30; i++) {

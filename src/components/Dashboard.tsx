@@ -160,12 +160,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="mt-5 pt-4 border-t border-teal-600/50">
           <div className="flex justify-between text-xs font-semibold mb-1.5">
             <span className="text-teal-100">{t.todayProgress}</span>
-            <span className="text-white font-bold">{stats.adherencePercentage}%</span>
+            <span className="text-white font-bold">
+              {stats.adherencePercentage !== null ? `${stats.adherencePercentage}%` : (isBn ? 'প্রযোজ্য নয় (N/A)' : 'N/A')}
+            </span>
           </div>
           <div className="w-full h-3 bg-teal-950/60 rounded-full overflow-hidden p-0.5">
             <div
               className="h-full bg-gradient-to-r from-teal-400 to-emerald-400 rounded-full transition-all duration-500"
-              style={{ width: `${stats.adherencePercentage}%` }}
+              style={{ width: `${stats.adherencePercentage ?? 0}%` }}
             />
           </div>
         </div>

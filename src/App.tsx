@@ -19,7 +19,8 @@ import type {
 } from './types';
 import { 
   formatLocalDate, 
-  syncAlarmsForDate 
+  syncAlarmsForDate,
+  calculateAdherence 
 } from './services/scheduler';
 import { translations } from './services/i18n';
 import { showWebNotification } from './services/notifications';
@@ -77,14 +78,34 @@ export function App() {
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
 
     // Standalone check
-    if (window.matchMedia('(display-mode: standalone)').matches) {
+    if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as unknown as { standalone?: boolean }).standalone === true) {
       setIsInstalled(true);
+    }
+
+    // Notification click routing handler from Service Worker
+    const handleSwMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'OPEN_ALARM_FROM_NOTIFICATION' && event.data.alarmId) {
+        const alarm = await db.alarmInstances.get(event.data.alarmId);
+        if (alarm) {
+          const med = await db.medicines.get(alarm.medicineId);
+          if (med) {
+            setActiveAlarm({ alarm, medicine: med });
+          }
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
     }
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
     };
   }, []);
 
@@ -94,12 +115,13 @@ export function App() {
   const meals = useLiveQuery(() => db.meals.toArray()) || [];
   const todayStr = formatLocalDate();
   const mealLogs = useLiveQuery(() => db.mealLogs.where('date').equals(todayStr).toArray()) || [];
+  const allAlarms = useLiveQuery(() => db.alarmInstances.toArray()) || [];
   const todayAlarms = useLiveQuery(() => db.alarmInstances.where('date').equals(todayStr).toArray()) || [];
   const selectedDateAlarms = useLiveQuery(() => db.alarmInstances.where('date').equals(selectedDate).toArray()) || [];
   const medicationLogs = useLiveQuery(() => db.medicationLogs.toArray()) || [];
   const userSettings = useLiveQuery(() => db.settings.get('current_user')) || DEFAULT_SETTINGS;
 
-  // Active Layer 1 Application Alarm Scheduler: checks every 10 seconds for due alarms
+  // Active Layer 1 Application Alarm Scheduler: checks every 6 seconds for due alarms
   const lastAlarmTriggerRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -124,20 +146,26 @@ export function App() {
                 // Show in-app full-screen alarm modal
                 setActiveAlarm({ alarm, medicine: med });
 
-                // Fire Web Notification as well
-                showWebNotification('MediTime: Medicine Alert!', {
-                  body: `Time to take ${med.name} (${med.dosage})`,
+                // Independent Medicine Notification
+                const privacy = userSettings.notificationPrivacy || 'full';
+                const notifBody = privacy === 'full'
+                  ? `Time to take ${med.name} (${med.dosage})`
+                  : 'It is time to take your prescribed medicine.';
+
+                showWebNotification('MediTime — Medicine Reminder', {
+                  body: notifBody,
                   tag: alarm.id,
+                  data: { alarmId: alarm.id, medicineId: med.id }
                 });
               }
             }
           }
         }
       }
-    }, 8000);
+    }, 6000);
 
     return () => clearInterval(checkAlarmsInterval);
-  }, [todayStr]);
+  }, [todayStr, userSettings.notificationPrivacy]);
 
   const handleInstallApp = async () => {
     if (!deferredPrompt) {
@@ -164,18 +192,45 @@ export function App() {
     });
   };
 
+  // Trigger test alarm screen for users to verify their alarm tone, volume, voice & buttons
+  const handleTriggerTestAlarm = () => {
+    let testMed = medicines.find(m => m.active);
+    if (!testMed) {
+      testMed = {
+        id: 'med_test_preview',
+        name: userSettings.language === 'bn' ? 'মেটফর্মিন ৫০০ মি.গ্রা.' : 'Metformin (500mg)',
+        dosage: '500 mg - 1 Tablet',
+        category: 'tablet',
+        frequency: 'once_daily',
+        instructions: userSettings.language === 'bn' ? 'খাবারের পর পানি সহ গ্রহণ করুন' : 'Take after breakfast with water',
+        startDate: todayStr,
+        active: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    }
+    const testAlarm: AlarmInstance = {
+      id: `test_alarm_${Date.now()}`,
+      medicineId: testMed.id,
+      scheduleId: 'test_sched',
+      date: todayStr,
+      scheduledTime: new Date().toISOString(),
+      status: 'due',
+      triggerType: 'fixed',
+      createdAt: new Date().toISOString()
+    };
+    setActiveAlarm({ alarm: testAlarm, medicine: testMed });
+  };
+
   const t = translations[userSettings.language];
   const isBn = userSettings.language === 'bn';
 
-  // Compute live adherence stats
-  const finishedLogs = todayAlarms.filter(a => a.status === 'taken' || a.status === 'missed' || a.status === 'skipped');
+  // Compute live adherence stats transparently (using mathematical formula)
   const takenCount = todayAlarms.filter(a => a.status === 'taken').length;
   const missedCount = todayAlarms.filter(a => a.status === 'missed').length;
   const skippedCount = todayAlarms.filter(a => a.status === 'skipped').length;
   const pendingCount = todayAlarms.filter(a => a.status === 'pending' || a.status === 'due').length;
-  const adherencePercentage = finishedLogs.length > 0 
-    ? Math.round((takenCount / finishedLogs.length) * 100) 
-    : 100;
+  const { adherencePercentage } = calculateAdherence(takenCount, missedCount, skippedCount);
 
   const stats = {
     totalScheduled: todayAlarms.length,
@@ -184,7 +239,7 @@ export function App() {
     skipped: skippedCount,
     pending: pendingCount,
     adherencePercentage,
-    streakDays: 3, // Initial healthy momentum
+    streakDays: 3,
   };
 
   return (
@@ -351,6 +406,7 @@ export function App() {
             }}
             onTriggerAlarm={(alarm, med) => setActiveAlarm({ alarm, medicine: med })}
             onRefresh={() => syncAlarmsForDate(selectedDate)}
+            onNavigateToMedicines={() => setActiveTab('medicines')}
           />
         )}
 
@@ -365,9 +421,9 @@ export function App() {
 
         {activeTab === 'reports' && (
           <ReportsView
-            stats={stats}
             medicines={medicines}
             logs={medicationLogs}
+            alarms={allAlarms}
             settings={userSettings}
           />
         )}
@@ -381,7 +437,10 @@ export function App() {
         )}
 
         {activeTab === 'diagnostics' && (
-          <CompatibilityView language={userSettings.language} />
+          <CompatibilityView 
+            language={userSettings.language}
+            onTriggerTestAlarm={handleTriggerTestAlarm}
+          />
         )}
 
         {activeTab === 'settings' && (
@@ -389,6 +448,7 @@ export function App() {
             settings={userSettings}
             meals={meals}
             onRefresh={() => syncAlarmsForDate()}
+            onTriggerTestAlarm={handleTriggerTestAlarm}
           />
         )}
       </main>
@@ -448,15 +508,12 @@ export function App() {
         </div>
       </nav>
 
-      {/* Full-Screen Alarm Interface Modal */}
+      {/* Full-Screen Smart Alarm Interface Modal */}
       {activeAlarm && (
         <AlarmModal
           alarm={activeAlarm.alarm}
           medicine={activeAlarm.medicine}
-          language={userSettings.language}
-          voiceEnabled={userSettings.voiceEnabled}
-          soundVolume={userSettings.soundVolume}
-          alarmSound={userSettings.alarmSound}
+          settings={userSettings}
           onClose={() => {
             setActiveAlarm(null);
             syncAlarmsForDate();

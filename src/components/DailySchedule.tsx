@@ -1,17 +1,19 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
   Calendar as CalendarIcon, 
   CheckCircle2, 
   Clock, 
-  Utensils 
+  Utensils,
+  Plus
 } from 'lucide-react';
 import type { AlarmInstance, Medicine, UserSettings } from '../types';
 import { 
   formatLocalDate, 
   formatFriendlyTime, 
-  recordDoseAction 
+  recordDoseAction,
+  syncAlarmsForDate 
 } from '../services/scheduler';
 
 interface DailyScheduleProps {
@@ -22,6 +24,7 @@ interface DailyScheduleProps {
   onSelectDate: (dateStr: string) => void;
   onTriggerAlarm: (alarm: AlarmInstance, med: Medicine) => void;
   onRefresh: () => void;
+  onNavigateToMedicines?: () => void;
 }
 
 export const DailySchedule: React.FC<DailyScheduleProps> = ({
@@ -32,25 +35,37 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
   onSelectDate,
   onTriggerAlarm,
   onRefresh,
+  onNavigateToMedicines,
 }) => {
   const isBn = settings.language === 'bn';
   const todayStr = formatLocalDate();
   const medicineMap = new Map<string, Medicine>(medicines.map(m => [m.id, m]));
+
+  // Auto-sync schedule alarms whenever selectedDate or active medicines change
+  useEffect(() => {
+    syncAlarmsForDate(selectedDate).then(() => {
+      onRefresh();
+    });
+  }, [selectedDate, medicines.length]);
 
   const sortedAlarms = [...alarms].sort(
     (a, b) => new Date(a.scheduledTime).getTime() - new Date(b.scheduledTime).getTime()
   );
 
   const handlePrevDay = () => {
-    const d = new Date(selectedDate + 'T00:00:00');
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
     d.setDate(d.getDate() - 1);
-    onSelectDate(formatLocalDate(d));
+    const newDateStr = formatLocalDate(d);
+    onSelectDate(newDateStr);
   };
 
   const handleNextDay = () => {
-    const d = new Date(selectedDate + 'T00:00:00');
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
     d.setDate(d.getDate() + 1);
-    onSelectDate(formatLocalDate(d));
+    const newDateStr = formatLocalDate(d);
+    onSelectDate(newDateStr);
   };
 
   const handleSetToday = () => {
@@ -62,7 +77,8 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
     onRefresh();
   };
 
-  const dateObj = new Date(selectedDate + 'T00:00:00');
+  const [y, m, d] = selectedDate.split('-').map(Number);
+  const dateObj = new Date(y, m - 1, d);
   const friendlyDate = dateObj.toLocaleDateString(isBn ? 'bn-BD' : 'en-US', {
     weekday: 'short',
     month: 'short',
@@ -70,7 +86,7 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
   });
 
   return (
-    <div className="space-y-4 pb-12 animate-in fade-in duration-200">
+    <div className="space-y-4 pb-14 animate-in fade-in duration-200">
       {/* Date Navigation Bar */}
       <div className="bg-white rounded-3xl p-3.5 border border-slate-200 shadow-sm flex items-center justify-between">
         <button
@@ -87,13 +103,13 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
             <span>{friendlyDate}</span>
           </div>
           {selectedDate === todayStr ? (
-            <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full inline-block mt-0.5">
               {isBn ? 'আজ' : 'Today'}
             </span>
           ) : (
             <button
               onClick={handleSetToday}
-              className="text-[10px] font-bold text-teal-600 hover:underline block mx-auto mt-0.5"
+              className="text-[10px] font-bold text-teal-600 hover:underline block mx-auto mt-0.5 cursor-pointer"
             >
               {isBn ? 'আজকে ফিরে যান' : 'Go to Today'}
             </button>
@@ -111,14 +127,27 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
 
       {/* Timeline Schedule List */}
       {sortedAlarms.length === 0 ? (
-        <div className="bg-white rounded-3xl p-8 text-center border border-slate-200 shadow-sm space-y-2">
-          <Clock className="w-10 h-10 text-slate-300 mx-auto" />
+        <div className="bg-white rounded-3xl p-8 text-center border border-slate-200 shadow-sm space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto text-slate-400">
+            <Clock className="w-6 h-6" />
+          </div>
           <h3 className="font-bold text-slate-800 text-base">
-            {isBn ? 'এই দিনে কোনো ওষুধ নির্ধারিত নেই' : 'No Medications Scheduled'}
+            {isBn ? 'এই দিনে কোনো ওষুধ নির্ধারিত নেই' : 'No Medications Scheduled for this Day'}
           </h3>
-          <p className="text-xs text-slate-500">
-            {isBn ? 'নতুন ওষুধ যোগ করুন বা অন্য দিন দেখুন।' : 'Check another date or add new prescriptions.'}
+          <p className="text-xs text-slate-500 max-w-xs mx-auto">
+            {isBn
+              ? 'প্রেসক্রিপশন অনুযায়ী ওষুধের দিন বা সময় পরিবর্তন করুন অথবা নতুন ওষুধ যোগ করুন।'
+              : 'Active medicines may not be scheduled for this weekday, or start/end dates differ. Check another date or add prescriptions.'}
           </p>
+          {onNavigateToMedicines && (
+            <button
+              onClick={onNavigateToMedicines}
+              className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              {isBn ? 'ওষুধ পরিচালনা করুন' : 'Manage Medications'}
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3 relative before:absolute before:inset-y-0 before:left-6 before:w-0.5 before:bg-slate-200">
@@ -219,12 +248,12 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
                         </>
                       ) : alarm.triggerType === 'fixed' ? (
                         <>
-                          <Clock className="w-3 h-3 text-sky-600" />
+                          <Clock className="w-3.5 h-3.5 text-sky-600" />
                           <span>{isBn ? 'নির্দিষ্ট সময়' : 'Fixed time'}</span>
                         </>
                       ) : (
                         <>
-                          <Utensils className="w-3 h-3 text-amber-600" />
+                          <Utensils className="w-3.5 h-3.5 text-amber-600" />
                           <span>{isBn ? 'খাবারের নির্ধারিত সময়' : 'Planned meal rule'}</span>
                         </>
                       )}
@@ -237,7 +266,7 @@ export const DailySchedule: React.FC<DailyScheduleProps> = ({
                           onClick={() => onTriggerAlarm(alarm, med)}
                           className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold text-[11px] transition cursor-pointer"
                         >
-                          {isBn ? 'অ্যালার্ম / গ্রহণ' : 'Take'}
+                          {isBn ? 'অ্যালার্ম / গ্রহণ' : 'Take / Alert'}
                         </button>
                         <button
                           onClick={() => handleAction(alarm, 'skip')}
