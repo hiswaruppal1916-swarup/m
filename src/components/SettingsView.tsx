@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Settings, 
   Volume2, 
@@ -18,17 +18,20 @@ import {
   Plus,
   Bell,
   Shield,
-  RotateCcw
+  RotateCcw,
+  AlertCircle,
+  CheckCircle2
 } from 'lucide-react';
 import { db, seedDemoData, DEFAULT_SETTINGS } from '../db';
 import type { 
   Meal, 
   UserSettings, 
   AlertMode, 
-  CustomAudioTrack 
+  CustomAudioTrack,
+  AlarmCategoryKey
 } from '../types';
 import { 
-  BUILT_IN_TONES, 
+  ALARM_TONE_CATALOG,
   startSoundPreview, 
   stopSoundPreview, 
   isAlarmAudioPlaying,
@@ -68,8 +71,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Custom audio tracks from IndexedDB
   const [customTracks, setCustomTracks] = useState<CustomAudioTrack[]>([]);
   const [currentlyPreviewingTone, setCurrentlyPreviewingTone] = useState<string | null>(null);
+  const [isTestingSelectedTone, setIsTestingSelectedTone] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<AlarmCategoryKey | 'all'>('all');
+  const [uploadFeedback, setUploadFeedback] = useState<{ message: string; isError?: boolean } | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const testTimerRef = useRef<any>(null);
 
   // Meal times state
   const [mealTimes, setMealTimes] = useState<Record<string, string>>(
@@ -82,6 +91,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return () => {
       stopSoundPreview();
       voiceService.stop();
+      if (testTimerRef.current) clearTimeout(testTimerRef.current);
     };
   }, []);
 
@@ -147,12 +157,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     onRefresh();
   };
 
+  const formatDuration = (seconds?: number): string => {
+    if (!seconds || seconds <= 0) return '';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getAudioDuration = (file: File | Blob): Promise<number> => {
+    return new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        audio.onloadedmetadata = () => {
+          const d = Math.round(audio.duration);
+          URL.revokeObjectURL(url);
+          resolve(isNaN(d) || !isFinite(d) ? 0 : d);
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve(0);
+        };
+        audio.src = url;
+      } catch {
+        resolve(0);
+      }
+    });
+  };
+
   const handlePlayPreview = (toneId: string, customBlob?: Blob) => {
     if (currentlyPreviewingTone === toneId && isAlarmAudioPlaying()) {
       stopSoundPreview();
       setCurrentlyPreviewingTone(null);
+      setIsTestingSelectedTone(false);
+      if (testTimerRef.current) clearTimeout(testTimerRef.current);
     } else {
       stopSoundPreview();
+      if (testTimerRef.current) clearTimeout(testTimerRef.current);
+      setIsTestingSelectedTone(false);
       setCurrentlyPreviewingTone(toneId);
       startSoundPreview(toneId, soundVolume, customBlob);
     }
@@ -161,6 +204,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleStopPreview = () => {
     stopSoundPreview();
     setCurrentlyPreviewingTone(null);
+    setIsTestingSelectedTone(false);
+    if (testTimerRef.current) clearTimeout(testTimerRef.current);
+  };
+
+  const handleTestSelectedTone = () => {
+    if (isTestingSelectedTone || isAlarmAudioPlaying()) {
+      handleStopPreview();
+      return;
+    }
+
+    setIsTestingSelectedTone(true);
+    setCurrentlyPreviewingTone(alarmTone);
+
+    let customBlob: Blob | undefined;
+    if (alarmTone.startsWith('custom:')) {
+      const trackId = alarmTone.replace('custom:', '');
+      const found = customTracks.find(t => t.id === trackId);
+      customBlob = found?.blob;
+    }
+
+    startSoundPreview(alarmTone, soundVolume, customBlob);
+
+    testTimerRef.current = setTimeout(() => {
+      handleStopPreview();
+    }, 6000);
+  };
+
+  const getSelectedToneLabel = (): string => {
+    if (alarmTone.startsWith('custom:')) {
+      const trackId = alarmTone.replace('custom:', '');
+      const track = customTracks.find((t) => t.id === trackId);
+      return track ? `🎵 ${track.name}` : `🎵 Custom Audio`;
+    }
+    const found = ALARM_TONE_CATALOG.find((t) => t.id === alarmTone);
+    if (found) {
+      return isBn ? found.nameBn : found.nameEn;
+    }
+    return alarmTone;
   };
 
   const handleTestVoice = () => {
@@ -204,36 +285,83 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate mime type
-    const validMimes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/mp4'];
-    const isSupportedType = validMimes.includes(file.type) || file.name.match(/\.(mp3|wav|ogg|m4a|aac)$/i);
+    if (file.size === 0) {
+      setUploadFeedback({
+        message: isBn ? 'নির্বাচিত অডিও ফাইলটি খালি (০ বাইট)।' : 'Selected audio file is empty (0 bytes).',
+        isError: true,
+      });
+      return;
+    }
+
+    // Max file size: 25MB
+    const MAX_SIZE = 25 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setUploadFeedback({
+        message: isBn
+          ? 'ফাইলের আকার সর্বোচ্চ ২৫ মেগাবাইটের বেশি হতে পারবে না।'
+          : 'File size exceeds maximum allowed limit of 25MB.',
+        isError: true,
+      });
+      return;
+    }
+
+    // Validate mime type & extension
+    const validMimes = [
+      'audio/mpeg',
+      'audio/mp3',
+      'audio/wav',
+      'audio/ogg',
+      'audio/aac',
+      'audio/x-m4a',
+      'audio/mp4',
+      'audio/webm',
+      'audio/x-wav'
+    ];
+    const hasValidExt = /\.(mp3|wav|ogg|m4a|aac|mp4|webm)$/i.test(file.name);
+    const isSupportedType = validMimes.includes(file.type) || file.type.startsWith('audio/') || hasValidExt;
 
     if (!isSupportedType) {
-      alert(
-        isBn
-          ? 'অনুগ্রহ করে একটি সমর্থিত অডিও ফাইল নির্বাচন করুন (MP3, WAV, OGG, M4A)।'
-          : 'Please select a supported audio file (MP3, WAV, OGG, or M4A).'
-      );
+      setUploadFeedback({
+        message: isBn
+          ? 'অনুগ্রহ করে একটি সমর্থিত অডিও ফাইল নির্বাচন করুন (MP3, WAV, OGG, AAC, M4A)।'
+          : 'Please select a supported audio file (MP3, WAV, OGG, AAC, M4A).',
+        isError: true,
+      });
       return;
     }
 
     try {
       const trackId = `custom_${Date.now()}`;
+      const duration = await getAudioDuration(file);
+      const cleanName = file.name.replace(/\.[^/.]+$/, '').trim() || 'Custom Sound';
+
       const newTrack: CustomAudioTrack = {
         id: trackId,
-        name: file.name.replace(/\.[^/.]+$/, ''),
+        name: cleanName,
         blob: file,
         mimeType: file.type || 'audio/mpeg',
         size: file.size,
+        duration,
         createdAt: new Date().toISOString()
       };
 
       await db.customAudio.put(newTrack);
       await loadCustomTracks();
       setAlarmTone(`custom:${trackId}`);
-      alert(isBn ? 'কাস্টম অডিও সফলভাবে সংরক্ষিত ও নির্বাচিত হয়েছে!' : 'Custom sound saved and selected as your alarm tone!');
+
+      const durStr = duration > 0 ? ` (${formatDuration(duration)})` : '';
+      setUploadFeedback({
+        message: isBn
+          ? `অডিও ফাইল লোড হয়েছে: ${cleanName}${durStr}`
+          : `Audio file loaded successfully: ${cleanName}${durStr}`,
+        isError: false,
+      });
     } catch (err) {
-      alert(isBn ? 'অডিও ফাইল সংরক্ষণে সমস্যা হয়েছে।' : 'Failed to save custom audio file to storage.');
+      console.error('Error saving custom audio:', err);
+      setUploadFeedback({
+        message: isBn ? 'অডিও ফাইল সংরক্ষণে সমস্যা হয়েছে।' : 'Failed to save custom audio file to storage.',
+        isError: true,
+      });
     }
   };
 
@@ -241,11 +369,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const confirmMsg = isBn ? 'এই কাস্টম অডিও মুছে ফেলতে চান?' : 'Delete this custom audio track?';
     if (!window.confirm(confirmMsg)) return;
 
+    if (currentlyPreviewingTone === trackId) {
+      handleStopPreview();
+    }
+
     await db.customAudio.delete(trackId);
     if (alarmTone === `custom:${trackId}`) {
-      setAlarmTone('gentle_chime');
+      setAlarmTone('classic_repeating_alarm');
     }
     await loadCustomTracks();
+    setUploadFeedback(null);
   };
 
   const handleLoadDemo = async () => {
@@ -438,44 +571,135 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* 3. ALARM SOUND LIBRARY (8 Built-in Tones with Preview) */}
+      {/* 3. ALARM SOUND LIBRARY (22 Professional Loud Sounds across 4 Categories) */}
       <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-            <Music className="w-4 h-4 text-teal-600" />
-            {isBn ? 'বিল্ট-ইন অ্যালার্ম সাউন্ড লাইব্রেরি' : 'Alarm Sound Library (8 Built-In Tones)'}
-          </h3>
+          <div>
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <Music className="w-4 h-4 text-teal-600" />
+              {isBn ? 'পেশাদার অ্যালার্ম সাউন্ড লাইব্রেরি (২২টি জোরালো সুর)' : 'Alarm Sound Library (22 Professional Tones)'}
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isBn 
+                ? 'উচ্চ কম্পাঙ্কের জোরালো সুর যা ঘুম ভাঙাতে ও মনোযোগ কাড়তে বিশেষভাবে প্রস্তুত।'
+                : 'Loud, attention-grabbing tones mastered for maximum clarity and wake-up response.'}
+            </p>
+          </div>
           {currentlyPreviewingTone && (
             <button
               onClick={handleStopPreview}
-              className="text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-xl transition flex items-center gap-1 cursor-pointer"
+              className="text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer shrink-0"
             >
-              <Square className="w-3 h-3" />
+              <Square className="w-3.5 h-3.5 fill-red-600" />
               <span>{isBn ? 'প্রিভিউ বন্ধ' : 'Stop Preview'}</span>
             </button>
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {BUILT_IN_TONES.map((tone) => {
+        {/* Currently Selected Tone & Test Banner */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 p-3.5 bg-teal-50/80 border border-teal-200/80 rounded-2xl">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-[10px] text-teal-700 font-bold uppercase tracking-wider block">
+                {isBn ? 'বর্তমানে সক্রিয় অ্যালার্ম সুর' : 'Currently Active Tone'}
+              </span>
+              <span className="text-xs font-black text-teal-950 truncate block">
+                {getSelectedToneLabel()}
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleTestSelectedTone}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer ${
+              isTestingSelectedTone
+                ? 'bg-amber-600 text-white animate-pulse'
+                : 'bg-teal-700 hover:bg-teal-800 text-white'
+            }`}
+          >
+            {isTestingSelectedTone ? (
+              <>
+                <Square className="w-3 h-3 fill-white" />
+                <span>{isBn ? 'টেস্ট থামান' : 'Stop Test'}</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-3 h-3 fill-white" />
+                <span>{isBn ? 'নির্বাচিত অ্যালার্ম টেস্ট করুন' : 'Test Selected Alarm'}</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Category Filter Tabs */}
+        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          {[
+            { key: 'all' as const, nameEn: 'All Sounds', nameBn: 'সকল সুর', count: 22 },
+            { key: 'classic_phone' as const, nameEn: 'Classic Phone', nameBn: 'ক্লাসিক ফোন', count: 6 },
+            { key: 'loud_attention' as const, nameEn: 'Loud Attention', nameBn: 'উচ্চ মনোযোগ', count: 6 },
+            { key: 'mechanical_bell' as const, nameEn: 'Mechanical & Bell', nameBn: 'যান্ত্রিক ও বেল', count: 5 },
+            { key: 'modern_smartphone' as const, nameEn: 'Smartphone', nameBn: 'স্মার্টফোন', count: 5 },
+          ].map((cat) => {
+            const isActive = selectedCategory === cat.key;
+            return (
+              <button
+                key={cat.key}
+                type="button"
+                onClick={() => setSelectedCategory(cat.key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                  isActive
+                    ? 'bg-teal-700 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                <span>{isBn ? cat.nameBn : cat.nameEn}</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                  isActive ? 'bg-teal-800 text-teal-100' : 'bg-slate-200 text-slate-600'
+                }`}>
+                  {cat.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Alarm Tones Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[380px] overflow-y-auto pr-1">
+          {(selectedCategory === 'all' 
+            ? ALARM_TONE_CATALOG 
+            : ALARM_TONE_CATALOG.filter(t => t.category === selectedCategory)
+          ).map((tone) => {
             const isSelected = alarmTone === tone.id;
             const isPreviewing = currentlyPreviewingTone === tone.id;
 
             return (
               <div
                 key={tone.id}
-                className={`p-3 rounded-2xl border flex items-center justify-between transition ${
+                className={`p-3 rounded-2xl border flex items-center justify-between transition gap-2 ${
                   isSelected
-                    ? 'bg-teal-50 border-teal-600 text-teal-950'
-                    : 'bg-slate-50 border-slate-200 text-slate-800'
+                    ? 'bg-teal-50 border-teal-600 text-teal-950 ring-1 ring-teal-500/50'
+                    : 'bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100/70'
                 }`}
               >
                 <div
                   onClick={() => setAlarmTone(tone.id)}
-                  className="flex-1 cursor-pointer"
+                  className="flex-1 min-w-0 cursor-pointer"
                 >
-                  <span className="block text-xs font-bold">{isBn ? tone.nameBn : tone.nameEn}</span>
-                  <span className="block text-[10px] text-slate-400 font-semibold">{tone.category}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold truncate block">{isBn ? tone.nameBn : tone.nameEn}</span>
+                    {isSelected && (
+                      <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.2 rounded-full font-bold shrink-0">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
+                    {isBn ? tone.descriptionBn : tone.descriptionEn}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -484,12 +708,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     onClick={() => handlePlayPreview(tone.id)}
                     className={`p-2 rounded-xl transition cursor-pointer ${
                       isPreviewing
-                        ? 'bg-teal-700 text-white'
+                        ? 'bg-amber-600 text-white animate-pulse'
                         : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
                     }`}
                     title={isPreviewing ? 'Stop Preview' : 'Preview Tone'}
+                    aria-label={isPreviewing ? 'Stop Preview' : 'Preview Tone'}
                   >
-                    {isPreviewing ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                    {isPreviewing ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                   </button>
 
                   <button
@@ -509,12 +734,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           })}
         </div>
 
-        {/* Volume slider */}
-        <div className="pt-2 border-t border-slate-100">
-          <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-            <span>{isBn ? 'অ্যালার্ম ভলিউম' : 'Alarm Volume'}</span>
-            <span className="text-teal-700 font-black">{Math.round(soundVolume * 100)}%</span>
-          </label>
+        {/* Volume slider & Phone Volume Reminder */}
+        <div className="pt-3 border-t border-slate-100 space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <Volume2 className="w-4 h-4 text-teal-600" />
+              <span>{isBn ? 'অ্যালার্ম ভলিউম' : 'Alarm Volume'}</span>
+            </label>
+            <span className="text-xs font-black text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
+              {Math.round(soundVolume * 100)}%
+            </span>
+          </div>
           <input
             type="range"
             min="0.1"
@@ -524,34 +754,112 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             onChange={(e) => setSoundVolume(Number(e.target.value))}
             className="w-full accent-teal-600 cursor-pointer"
           />
+
+          {/* Media Volume Notice Banner */}
+          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950 mt-2">
+            <Volume2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="font-bold">
+                {isBn ? 'গুরুত্বপূর্ণ ভলিউম টিপস:' : 'Important Phone Volume Tip:'}
+              </p>
+              <p className="text-amber-900 leading-relaxed">
+                {isBn
+                  ? 'আপনার ফোনের Media Volume বাড়িয়ে নিন, যাতে অ্যালার্মের শব্দ ভালোভাবে শুনতে পান।'
+                  : "Please ensure your phone's Media Volume is turned up so you can hear the alarm clearly."}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* 4. CUSTOM SOUND FROM PHONE & PLAYLIST */}
       <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3">
-        <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-          <Music className="w-4 h-4 text-teal-600" />
-          {isBn ? 'ফোন হতে নিজস্ব রিংটোন নির্বাচন' : 'Custom Sound From Phone'}
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+            <Music className="w-4 h-4 text-teal-600" />
+            {isBn ? 'ফোন হতে নিজস্ব রিংটোন নির্বাচন' : 'Custom Sound From Phone'}
+          </h3>
+          {alarmTone.startsWith('custom:') && (
+            <button
+              type="button"
+              onClick={() => setAlarmTone('classic_repeating_alarm')}
+              className="text-xs font-bold text-teal-700 hover:text-teal-900 underline flex items-center gap-1 cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>{isBn ? 'বিল্ট-ইন সাউন্ডে ফিরুন' : 'Reset to Built-in'}</span>
+            </button>
+          )}
+        </div>
+
         <p className="text-xs text-slate-500">
           {isBn
-            ? 'আপনার ফোনের নিজস্ব অডিও ফাইল (MP3, WAV, OGG, M4A) নির্বাচন করুন। ফাইলটি লোকাল ডেটাবেজে সংরক্ষিত থাকবে।'
-            : 'Select an audio file from your phone storage. The file is safely stored in local IndexedDB.'}
+            ? 'আপনার ফোনের নিজস্ব অডিও ফাইল (MP3, WAV, OGG, AAC, M4A) নির্বাচন করুন। ফাইলটি সম্পূর্ণ অফলাইনে লোকাল ডেটাবেজে সংরক্ষিত থাকবে।'
+            : 'Select any audio file from your device (MP3, WAV, OGG, AAC, M4A). Files are stored 100% offline in your browser database.'}
         </p>
 
-        {/* Upload Button */}
+        {/* Upload Trigger Button & Accessible Offscreen Input */}
         <div>
-          <label className="py-2.5 px-4 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-2xl text-xs font-bold text-teal-800 transition flex items-center justify-center gap-2 cursor-pointer w-fit">
+          <button
+            type="button"
+            onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+                fileInputRef.current.click();
+              }
+            }}
+            className="py-2.5 px-4 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-2xl text-xs font-bold text-teal-800 transition flex items-center justify-center gap-2 cursor-pointer w-fit shadow-xs"
+          >
             <Plus className="w-4 h-4 text-teal-600" />
             <span>{isBn ? 'ফোন হতে অডিও ফাইল যোগ করুন' : 'Choose Sound From My Phone'}</span>
-            <input
-              type="file"
-              accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
-              onChange={handleUploadCustomSound}
-              className="hidden"
-            />
-          </label>
+          </button>
+          
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*,audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/aac,audio/x-m4a,audio/mp4,.mp3,.wav,.ogg,.m4a,.aac"
+            onChange={handleUploadCustomSound}
+            style={{
+              position: 'absolute',
+              width: '1px',
+              height: '1px',
+              padding: 0,
+              margin: '-1px',
+              overflow: 'hidden',
+              clip: 'rect(0, 0, 0, 0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+              opacity: 0,
+              pointerEvents: 'none'
+            }}
+            aria-hidden="true"
+            tabIndex={-1}
+          />
         </div>
+
+        {/* Upload Feedback Message */}
+        {uploadFeedback && (
+          <div className={`p-3 rounded-2xl flex items-center justify-between gap-2 text-xs font-medium border ${
+            uploadFeedback.isError
+              ? 'bg-red-50 text-red-900 border-red-200'
+              : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+          }`}>
+            <div className="flex items-center gap-2">
+              {uploadFeedback.isError ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              )}
+              <span>{uploadFeedback.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setUploadFeedback(null)}
+              className="text-slate-400 hover:text-slate-700 font-bold px-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Custom Track Playlist List */}
         {customTracks.length > 0 && (
@@ -566,17 +874,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               return (
                 <div
                   key={track.id}
-                  className={`p-3 rounded-2xl border flex items-center justify-between transition ${
-                    isSelected ? 'bg-teal-50 border-teal-600 text-teal-900' : 'bg-slate-50 border-slate-200'
+                  className={`p-3 rounded-2xl border flex items-center justify-between transition gap-2 ${
+                    isSelected ? 'bg-teal-50 border-teal-600 text-teal-900 ring-1 ring-teal-500/50' : 'bg-slate-50 border-slate-200'
                   }`}
                 >
                   <div
                     onClick={() => setAlarmTone(`custom:${track.id}`)}
                     className="flex-1 min-w-0 cursor-pointer pr-2"
                   >
-                    <span className="block text-xs font-bold truncate">{track.name}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="block text-xs font-bold truncate">{track.name}</span>
+                      {isSelected && (
+                        <span className="text-[9px] bg-teal-600 text-white px-1.5 py-0.2 rounded-full font-bold shrink-0">
+                          Active
+                        </span>
+                      )}
+                    </div>
                     <span className="block text-[10px] text-slate-400">
-                      {Math.round(track.size / 1024)} KB • {track.mimeType}
+                      {track.duration ? `${formatDuration(track.duration)} • ` : ''}
+                      {Math.round(track.size / 1024)} KB • {track.mimeType || 'audio'}
                     </span>
                   </div>
 
@@ -585,11 +901,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       type="button"
                       onClick={() => handlePlayPreview(track.id, track.blob)}
                       className={`p-2 rounded-xl transition cursor-pointer ${
-                        isPreviewing ? 'bg-teal-700 text-white' : 'bg-white border text-slate-700 hover:bg-slate-200'
+                        isPreviewing ? 'bg-amber-600 text-white animate-pulse' : 'bg-white border text-slate-700 hover:bg-slate-200'
                       }`}
                       title={isPreviewing ? 'Stop Preview' : 'Preview'}
+                      aria-label={isPreviewing ? 'Stop Preview' : 'Preview'}
                     >
-                      {isPreviewing ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      {isPreviewing ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                     </button>
 
                     <button
@@ -599,14 +916,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         isSelected ? 'bg-teal-700 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                       }`}
                     >
-                      {isSelected ? '✓' : (isBn ? 'নির্বাচন' : 'Select')}
+                      {isSelected ? '✓' : (isBn ? 'ব্যবহার করুন' : 'Use Tone')}
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleDeleteCustomTrack(track.id)}
                       className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 transition cursor-pointer"
-                      title="Delete"
+                      title={isBn ? 'মুছুন' : 'Delete'}
+                      aria-label="Delete track"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

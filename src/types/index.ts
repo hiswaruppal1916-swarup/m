@@ -51,7 +51,41 @@ export type LogStatus = 'taken' | 'skipped' | 'missed';
 
 export type AlertMode = 'alarm_sound' | 'voice_reminder' | 'alarm_and_voice';
 
+export type AlarmCategoryKey = 
+  | 'all'
+  | 'classic_phone' 
+  | 'loud_attention' 
+  | 'mechanical_bell' 
+  | 'modern_smartphone';
+
 export type BuiltInAlarmTone = 
+  // Category 1 — Classic Phone Alarms
+  | 'classic_repeating_alarm'
+  | 'traditional_digital_alarm'
+  | 'old_telephone_ring'
+  | 'repeating_clock_alarm'
+  | 'classic_bell_alarm'
+  | 'double_bell_alarm'
+  // Category 2 — Loud Attention Alarms
+  | 'urgent_digital_beep'
+  | 'rapid_repeating_beep'
+  | 'loud_electronic_alarm'
+  | 'repeating_warning_tone'
+  | 'high_attention_alarm'
+  | 'persistent_wakeup_alarm'
+  // Category 3 — Mechanical and Bell Alarms
+  | 'mechanical_clock_bell'
+  | 'double_metal_bell'
+  | 'repeating_metal_ring'
+  | 'traditional_clock_ring'
+  | 'loud_school_bell'
+  // Category 4 — Modern Smartphone Alarms
+  | 'digital_wakeup'
+  | 'repeating_pulse_alarm'
+  | 'sharp_electronic_ring'
+  | 'fast_repeating_tone'
+  | 'multilayer_digital_alarm'
+  // Backward-compatible aliases
   | 'gentle_chime'
   | 'classic_alarm'
   | 'digital_alarm'
@@ -60,6 +94,15 @@ export type BuiltInAlarmTone =
   | 'soft_reminder'
   | 'morning_alarm'
   | 'traditional_alarm';
+
+export interface AlarmToneItem {
+  id: BuiltInAlarmTone;
+  category: AlarmCategoryKey;
+  nameEn: string;
+  nameBn: string;
+  descriptionEn: string;
+  descriptionBn: string;
+}
 
 export interface CustomAudioTrack {
   id: string;

@@ -8,7 +8,8 @@ import {
   Settings as SettingsIcon, 
   Download, 
   Wifi, 
-  WifiOff 
+  WifiOff,
+  CheckCircle2
 } from 'lucide-react';
 
 import { db, initializeDatabase, DEFAULT_SETTINGS } from './db';
@@ -58,6 +59,15 @@ export function App() {
     completionTime: string;
     updatedMedicines: any[];
   } | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   // DB initialization
   useEffect(() => {
@@ -528,9 +538,44 @@ export function App() {
           initialSchedule={editingSchedule}
           meals={meals}
           language={userSettings.language}
-          onClose={() => setIsMedicineModalOpen(false)}
-          onSaved={() => syncAlarmsForDate()}
+          onClose={() => {
+            setIsMedicineModalOpen(false);
+            setEditingMedicine(null);
+            setEditingSchedule(null);
+          }}
+          onSaved={async (savedMedicineName?: string) => {
+            setIsMedicineModalOpen(false);
+            setEditingMedicine(null);
+            setEditingSchedule(null);
+            setActiveTab('medicines');
+            await syncAlarmsForDate();
+            const displayName = savedMedicineName || (userSettings.language === 'bn' ? 'ওষুধ' : 'Medicine');
+            setToastMessage(
+              userSettings.language === 'bn'
+                ? `"${displayName}" সফলভাবে সংরক্ষিত হয়েছে!`
+                : `"${displayName}" saved successfully!`
+            );
+          }}
         />
+      )}
+
+      {/* Floating Success Toast Banner */}
+      {toastMessage && (
+        <div 
+          role="status" 
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-teal-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-teal-500/40 animate-in fade-in slide-in-from-top-3 duration-200 max-w-sm w-[92%] sm:w-auto"
+        >
+          <CheckCircle2 className="w-5 h-5 text-teal-300 shrink-0" />
+          <span className="text-xs sm:text-sm font-semibold flex-1 leading-snug">{toastMessage}</span>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="text-teal-200 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded cursor-pointer shrink-0"
+            aria-label="Dismiss notification"
+          >
+            ✕
+          </button>
+        </div>
       )}
 
       {/* Meal Confirmation & Dynamic Rescheduling Feedback Modal */}

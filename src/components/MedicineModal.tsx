@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Pill, Clock, Utensils, Calendar, Camera } from 'lucide-react';
+import { X, Pill, Clock, Utensils, Calendar, Camera, Loader2 } from 'lucide-react';
 import { db } from '../db';
 import type { 
   Medicine, 
@@ -17,7 +17,7 @@ interface MedicineModalProps {
   meals: Meal[];
   language: 'en' | 'bn';
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (medicineName: string) => void;
 }
 
 const CATEGORIES: { value: MedicineCategory; labelEn: string; labelBn: string }[] = [
@@ -56,6 +56,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
   const [instructions, setInstructions] = useState<string>(initialMedicine?.instructions || '');
   const [image, setImage] = useState<string | undefined>(initialMedicine?.image);
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const weekdayNamesEn = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const weekdayNamesBn = ['রবি', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহঃ', 'শুক্র', 'শনি'];
@@ -82,6 +83,8 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (!name.trim()) {
       setError(isBn ? 'অনুগ্রহ করে ওষুধের নাম লিখুন' : 'Please enter the medicine name');
       return;
@@ -90,6 +93,9 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
       setError(isBn ? 'অনুগ্রহ করে ডোজ বা মাত্রা লিখুন' : 'Please enter the dosage strength');
       return;
     }
+
+    setIsSubmitting(true);
+    setError(null);
 
     try {
       const medId = initialMedicine?.id || `med_${Date.now()}`;
@@ -124,18 +130,31 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         enabled: initialSchedule ? initialSchedule.enabled : true,
       };
 
+      // 1. Save into IndexedDB
       await db.medicines.put(medicineRecord);
       await db.medicationSchedules.put(scheduleRecord);
 
-      // Single source of truth synchronization: sync today and start date
-      await syncAlarmsForDate(todayStr);
-      if (startDate && startDate !== todayStr) {
-        await syncAlarmsForDate(startDate);
+      // 2. Verify database insertion
+      const savedMed = await db.medicines.get(medId);
+      if (!savedMed) {
+        throw new Error(isBn ? 'ওষুধ সংরক্ষণ নিশ্চিত করা যায়নি।' : 'Database verification failed.');
       }
 
-      onSaved();
+      // 3. Immediately sync schedules for today and start date
+      try {
+        await syncAlarmsForDate(todayStr);
+        if (startDate && startDate !== todayStr) {
+          await syncAlarmsForDate(startDate);
+        }
+      } catch (syncErr) {
+        console.warn('Schedule sync completed with note:', syncErr);
+      }
+
+      // 4. Close modal and notify App to switch view and show success toast
+      onSaved(medicineRecord.name);
       onClose();
     } catch (err: unknown) {
+      setIsSubmitting(false);
       setError(err instanceof Error ? err.message : 'Error saving prescription');
     }
   };
@@ -162,6 +181,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
           </div>
           <button
             onClick={onClose}
+            disabled={isSubmitting}
             className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -431,15 +451,26 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
             <button
               type="button"
               onClick={onClose}
+              disabled={isSubmitting}
               className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl text-sm transition cursor-pointer"
             >
               {isBn ? 'বাতিল' : 'Cancel'}
             </button>
             <button
               type="submit"
-              className="flex-1 py-3 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-2xl text-sm shadow-md transition cursor-pointer"
+              disabled={isSubmitting}
+              className={`flex-1 py-3.5 text-white font-bold rounded-2xl text-sm shadow-md transition cursor-pointer flex items-center justify-center gap-2 ${
+                isSubmitting ? 'bg-teal-400 cursor-not-allowed opacity-90' : 'bg-teal-600 hover:bg-teal-700 active:scale-98'
+              }`}
             >
-              {isBn ? 'ওষুধ সংরক্ষণ করুন' : 'Save Medicine'}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{isBn ? 'সংরক্ষণ করা হচ্ছে...' : 'Saving...'}</span>
+                </>
+              ) : (
+                <span>{initialMedicine ? (isBn ? 'পরিবর্তন সংরক্ষণ করুন' : 'Save Changes') : (isBn ? 'ওষুধ সংরক্ষণ করুন' : 'Save Medicine')}</span>
+              )}
             </button>
           </div>
         </form>
