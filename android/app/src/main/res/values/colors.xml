@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="meditime_teal">#0F766E</color>
+    <color name="meditime_teal_dark">#134E4A</color>
+    <color name="meditime_teal_light">#14B8A6</color>
+    <color name="meditime_bg_dark">#0F172A</color>
+    <color name="meditime_card_dark">#1E293B</color>
+    <color name="meditime_card_border">#334155</color>
+    <color name="meditime_text_primary">#F8FAFC</color>
+    <color name="meditime_text_secondary">#94A3B8</color>
+    <color name="color_taken">#059669</color>
+    <color name="color_taken_pressed">#047857</color>
+    <color name="color_snooze">#2563EB</color>
+    <color name="color_snooze_pressed">#1D4ED8</color>
+    <color name="color_stop">#475569</color>
+    <color name="color_stop_pressed">#334155</color>
+    <color name="color_skip">#DC2626</color>
+    <color name="color_skip_pressed">#B91C1C</color>
+    <color name="color_warning">#D97706</color>
+</resources>

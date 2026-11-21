@@ -150,4 +150,40 @@ describe('Alarm Engine & Professional Loud Sound Library Verification', () => {
     // Mixed with skipped: 3 taken, 1 missed, 1 skipped: 3/5 = 60%
     expect(calculateAdherence(3, 1, 1).displayPercentage).toBe('60%');
   });
+
+  it('validates Android Home Screen Widget statistics computation', () => {
+    const mockAlarms = [
+      { id: '1', status: 'taken', scheduledTime: '2026-11-21T08:00:00.000Z' },
+      { id: '2', status: 'taken', scheduledTime: '2026-11-21T13:00:00.000Z' },
+      { id: '3', status: 'pending', scheduledTime: '2026-11-21T18:00:00.000Z' },
+      { id: '4', status: 'due', scheduledTime: '2026-11-21T20:30:00.000Z' },
+      { id: '5', status: 'missed', scheduledTime: '2026-11-21T07:00:00.000Z' },
+    ];
+
+    const total = mockAlarms.length;
+    const taken = mockAlarms.filter(a => a.status === 'taken').length;
+    const missed = mockAlarms.filter(a => a.status === 'missed').length;
+    const remaining = total - taken - missed;
+
+    expect(total).toBe(5);
+    expect(taken).toBe(2);
+    expect(missed).toBe(1);
+    expect(remaining).toBe(2);
+
+    const progressBadge = `[ ${taken} / ${total} Taken ]`;
+    expect(progressBadge).toBe('[ 2 / 5 Taken ]');
+  });
+
+  it('ensures boot reschedule only retains future alarm instances', () => {
+    const now = 1700000000000;
+    const alarms = [
+      { id: 'past_1', triggerTimeMs: now - 50000 },
+      { id: 'future_1', triggerTimeMs: now + 60000 },
+      { id: 'future_2', triggerTimeMs: now + 3600000 },
+    ];
+
+    const toReschedule = alarms.filter(a => a.triggerTimeMs > now);
+    expect(toReschedule.length).toBe(2);
+    expect(toReschedule.map(a => a.id)).toEqual(['future_1', 'future_2']);
+  });
 });

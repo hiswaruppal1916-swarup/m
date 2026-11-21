@@ -262,7 +262,26 @@ export async function syncAlarmsForDate(dateStr: string = formatLocalDate()): Pr
     // Ignore if settings not yet seeded
   }
 
-  return await db.alarmInstances.where('date').equals(dateStr).toArray();
+  const updatedAlarms = await db.alarmInstances.where('date').equals(dateStr).toArray();
+
+  // Notify registered sync listeners (e.g. Android Native Alarm Manager & Widget Provider)
+  for (const listener of syncListeners) {
+    try {
+      listener(updatedAlarms, dateStr);
+    } catch (err) {
+      console.warn('[Scheduler] Sync listener error:', err);
+    }
+  }
+
+  return updatedAlarms;
+}
+
+type SyncAlarmsListener = (alarms: AlarmInstance[], dateStr: string) => void;
+const syncListeners: Set<SyncAlarmsListener> = new Set();
+
+export function onAlarmsSynced(listener: SyncAlarmsListener): () => void {
+  syncListeners.add(listener);
+  return () => syncListeners.delete(listener);
 }
 
 /**

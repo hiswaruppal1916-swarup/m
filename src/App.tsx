@@ -23,6 +23,7 @@ import {
   syncAlarmsForDate,
   calculateAdherence 
 } from './services/scheduler';
+import { syncPendingNativeActions } from './services/nativeBridge';
 import { translations } from './services/i18n';
 import { showWebNotification } from './services/notifications';
 
@@ -71,9 +72,21 @@ export function App() {
 
   // DB initialization
   useEffect(() => {
-    initializeDatabase().then(() => {
+    initializeDatabase().then(async () => {
+      await syncPendingNativeActions();
       syncAlarmsForDate();
     });
+
+    const handleVisibilitySync = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        const applied = await syncPendingNativeActions();
+        if (applied > 0) {
+          syncAlarmsForDate();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilitySync);
+    window.addEventListener('focus', handleVisibilitySync);
 
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -110,6 +123,8 @@ export function App() {
     }
 
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilitySync);
+      window.removeEventListener('focus', handleVisibilitySync);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@drawable/bg_widget_card"
+    android:padding="12dp"
+    android:gravity="center_vertical">
+
+    <ImageView
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:src="@drawable/ic_med_pill"
+        android:contentDescription="MediTime"
+        android:layout_marginEnd="10dp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="MEDiTime"
+            android:textColor="@color/meditime_teal_light"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_tv_next_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Next: G — 500"
+            android:textColor="@color/meditime_text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/widget_tv_next_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="8:30 PM"
+            android:textColor="@color/meditime_text_secondary"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_tv_progress_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="2/5 Taken"
+        android:textColor="@color/color_taken"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:background="@drawable/bg_pill_badge"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp" />
+</LinearLayout>

@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MediTime</string>
+    <string name="title_activity_main">MediTime</string>
+    <string name="package_name">com.meditime.app</string>
+    <string name="custom_url_scheme">com.meditime.app</string>
+
+    <!-- Alarm & Notification Strings -->
+    <string name="alarm_channel_name">MediTime Medicine Alarms</string>
+    <string name="alarm_channel_description">High-priority medication reminders and lock-screen alerts</string>
+    <string name="notification_title_due">ওষুধ খাওয়ার সময় হয়েছে!</string>
+    <string name="notification_title_due_en">Time to take your medicine!</string>
+    <string name="action_taken">খেয়েছি (Taken)</string>
+    <string name="action_snooze">পরে খাব (Snooze)</string>
+    <string name="action_stop">অ্যালার্ম বন্ধ (Stop)</string>
+    <string name="action_skip">এবার খাব না (Skip)</string>
+    <string name="action_open">খুলুন (Open)</string>
+
+    <!-- Widget Strings -->
+    <string name="widget_name">MediTime — Daily Medicine</string>
+    <string name="widget_header_title">MEDiTime</string>
+    <string name="widget_subtitle">Today\'s Medicine</string>
+    <string name="widget_taken_label">Taken</string>
+    <string name="widget_remaining_label">Remaining</string>
+    <string name="widget_missed_label">Missed</string>
+    <string name="widget_next_medicine_prefix">Next Medicine:</string>
+    <string name="widget_status_all_active">All reminders active</string>
+    <string name="widget_no_medicines">No medicines scheduled for today</string>
+</resources>

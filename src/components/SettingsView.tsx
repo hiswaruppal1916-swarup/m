@@ -20,7 +20,12 @@ import {
   Shield,
   RotateCcw,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Smartphone,
+  ExternalLink,
+  ShieldCheck,
+  LayoutGrid,
+  Zap
 } from 'lucide-react';
 import { db, seedDemoData, DEFAULT_SETTINGS } from '../db';
 import type { 
@@ -40,6 +45,15 @@ import {
 import { voiceService } from '../services/voice';
 import { showWebNotification, requestNotificationPermission } from '../services/notifications';
 import { syncAlarmsForDate } from '../services/scheduler';
+import { 
+  checkDevicePermissions, 
+  requestExactAlarmPermission, 
+  requestBatteryOptimizationExemption, 
+  openNotificationSettings, 
+  openManufacturerSettings, 
+  triggerTestNativeAlarm,
+  type DevicePermissionStatus 
+} from '../services/nativeBridge';
 
 interface SettingsViewProps {
   settings: UserSettings;
@@ -76,6 +90,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [uploadFeedback, setUploadFeedback] = useState<{ message: string; isError?: boolean } | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [deviceStatus, setDeviceStatus] = useState<DevicePermissionStatus | null>(null);
+  const [testingNativeAlarm, setTestingNativeAlarm] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const testTimerRef = useRef<any>(null);
@@ -85,9 +101,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     meals.reduce((acc, m) => ({ ...acc, [m.id]: m.plannedTime }), {})
   );
 
+  const refreshDeviceStatus = async () => {
+    try {
+      const status = await checkDevicePermissions();
+      setDeviceStatus(status);
+    } catch (e) {
+      console.warn('Error checking device permissions:', e);
+    }
+  };
+
   useEffect(() => {
     loadCustomTracks();
     setAvailableVoices(voiceService.getAvailableVoices());
+    refreshDeviceStatus();
     return () => {
       stopSoundPreview();
       voiceService.stop();
@@ -229,6 +255,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     testTimerRef.current = setTimeout(() => {
       handleStopPreview();
     }, 6000);
+  };
+
+  const handleTriggerNativeAlarmTest = async () => {
+    setTestingNativeAlarm(true);
+    await triggerTestNativeAlarm(
+      isBn ? 'প্যান্টোপ্রাজল ৪০ মি.গ্রা.' : 'Pantoprazole 40mg',
+      '40mg'
+    );
+    setTimeout(() => setTestingNativeAlarm(false), 3000);
   };
 
   const getSelectedToneLabel = (): string => {
@@ -526,7 +561,222 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* 2. ALERT MODE SELECTION */}
+      {/* 2. ALARM & DEVICE SETTINGS (Native Android Companion Dashboard) */}
+      <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-teal-600" />
+              {isBn ? 'অ্যালার্ম ও ডিভাইস সেটিংস' : 'Alarm & Device Settings'}
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isBn 
+                ? 'লক-স্ক্রিন ফুল-স্ক্রিন অ্যালার্ম, হোম স্ক্রিন উইজেট ও অ্যান্ড্রয়েড সিস্টেম পারমিশন'
+                : 'Native lock-screen alarm, home screen widget & Android system permissions'}
+            </p>
+          </div>
+          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+            deviceStatus?.isNative
+              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+              : 'bg-slate-100 text-slate-700 border border-slate-200'
+          }`}>
+            {deviceStatus?.isNative 
+              ? (isBn ? 'অ্যান্ড্রয়েড নেটিভ সক্রিয়' : 'Android Native Active') 
+              : (isBn ? 'ওয়েব ব্রাউজার / PWA মোড' : 'Web / PWA Mode')}
+          </span>
+        </div>
+
+        {/* Permission Diagnostics Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          {/* A. Notifications */}
+          <div className="p-3 rounded-2xl border border-slate-200 bg-slate-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-teal-600" />
+                {isBn ? 'সিস্টেম নোটিফিকেশন' : 'System Notifications'}
+              </span>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                deviceStatus?.notificationsGranted
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-amber-100 text-amber-800'
+              }`}>
+                {deviceStatus?.notificationsGranted ? (isBn ? 'অনুমোদিত' : 'Enabled') : (isBn ? 'অনুমতি প্রয়োজন' : 'Permission Required')}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              {isBn ? 'লক-স্ক্রিন নোটিফিকেশন এবং জরুরি ওষুধের সংকেত পেতে প্রয়োজন।' : 'Essential for persistent lock-screen alerts and reminder badges.'}
+            </p>
+            {deviceStatus?.isNative && !deviceStatus.notificationsGranted && (
+              <button
+                type="button"
+                onClick={openNotificationSettings}
+                className="w-full py-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl text-[11px] font-bold text-slate-700 transition flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>{isBn ? 'নোটিফিকেশন সেটিংস খুলুন' : 'Open Notification Settings'}</span>
+              </button>
+            )}
+          </div>
+
+          {/* B. Exact Alarm Permission */}
+          <div className="p-3 rounded-2xl border border-slate-200 bg-slate-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-teal-600" />
+                {isBn ? 'সঠিক সময়ে অ্যালার্ম (Exact Alarm)' : 'Exact Alarm Scheduling'}
+              </span>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                deviceStatus?.exactAlarmGranted
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : deviceStatus?.isNative
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-200 text-slate-600'
+              }`}>
+                {deviceStatus?.exactAlarmGranted 
+                  ? (isBn ? 'সক্রিয়' : 'Enabled') 
+                  : deviceStatus?.isNative 
+                    ? (isBn ? 'অনুমতি প্রয়োজন' : 'Action Required') 
+                    : (isBn ? 'PWA টাইমার' : 'PWA Scheduler')}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              {isBn ? 'অ্যান্ড্রয়েড ডজ মোডেও নির্ধারিত সেকেন্ডে অ্যালার্ম বাজানোর নিশ্চয়তা।' : 'Guarantees alarms fire on the exact second even during device sleep.'}
+            </p>
+            {deviceStatus?.isNative && !deviceStatus.exactAlarmGranted && (
+              <button
+                type="button"
+                onClick={requestExactAlarmPermission}
+                className="w-full py-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl text-[11px] font-bold text-teal-700 transition flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>{isBn ? 'সঠিক অ্যালার্ম অনুমতি দিন' : 'Grant Exact Alarm Access'}</span>
+              </button>
+            )}
+          </div>
+
+          {/* C. Battery Optimization Exemption */}
+          <div className="p-3 rounded-2xl border border-slate-200 bg-slate-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Zap className="w-4 h-4 text-teal-600" />
+                {isBn ? 'ব্যাটারি অপ্টিমাইজেশন ছাড়' : 'Battery Optimization Exemption'}
+              </span>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                deviceStatus?.batteryOptimizationIgnored
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : deviceStatus?.isNative
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-200 text-slate-600'
+              }`}>
+                {deviceStatus?.batteryOptimizationIgnored 
+                  ? (isBn ? 'অবাধ ব্যাকগ্রাউন্ড' : 'Unrestricted') 
+                  : deviceStatus?.isNative 
+                    ? (isBn ? 'সীমাবদ্ধ' : 'Restricted') 
+                    : (isBn ? 'প্রযোজ্য নয়' : 'Not Supported')}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              {isBn ? 'অ্যান্ড্রয়েড যাতে ব্যাকগ্রাউন্ডে অ্যালার্ম বন্ধ না করে দেয়।' : 'Prevents Android OS from killing MediTime alarm service in background.'}
+            </p>
+            {deviceStatus?.isNative && !deviceStatus.batteryOptimizationIgnored && (
+              <button
+                type="button"
+                onClick={requestBatteryOptimizationExemption}
+                className="w-full py-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl text-[11px] font-bold text-teal-700 transition flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>{isBn ? 'ব্যাটারি সীমাবদ্ধতা বন্ধ করুন' : 'Exempt from Battery Saver'}</span>
+              </button>
+            )}
+          </div>
+
+          {/* D. Full-screen Lock-Screen Alarm */}
+          <div className="p-3 rounded-2xl border border-slate-200 bg-slate-50 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Bell className="w-4 h-4 text-teal-600" />
+                {isBn ? 'লক স্ক্রিন অ্যালার্ম পর্দা' : 'Lock-Screen Alarm Screen'}
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                {deviceStatus?.isNative ? (isBn ? 'সক্রিয় (Full-Screen Intent)' : 'Full-Screen Native') : (isBn ? 'ব্রাউজার মোডাল' : 'Modal Alert')}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              {isBn ? 'ফোন লক করা থাকলেও সরাসরি সম্পূর্ণ স্ক্রিন জুড়ে অ্যালার্ম ও বাটন প্রদর্শিত হয়।' : 'Renders interactive alarm with one-tap action buttons over lock screen.'}
+            </p>
+            {deviceStatus?.isNative && (
+              <button
+                type="button"
+                onClick={handleTriggerNativeAlarmTest}
+                disabled={testingNativeAlarm}
+                className="w-full py-1.5 bg-teal-50 border border-teal-200 hover:bg-teal-100 rounded-xl text-[11px] font-bold text-teal-800 transition flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Play className="w-3 h-3" />
+                <span>{testingNativeAlarm ? (isBn ? '২ সেকেন্ডে অ্যালার্ম বাজবে...' : 'Alarm firing in 2s...') : (isBn ? 'লক-স্ক্রিন টেস্ট অ্যালার্ম বাজান' : 'Test Lock-Screen Alarm')}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Home Screen Widget Guide Banner */}
+        <div className="p-3.5 bg-gradient-to-r from-teal-50 to-slate-50 border border-teal-200/80 rounded-2xl space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <LayoutGrid className="w-4 h-4 text-teal-700" />
+              {isBn ? 'অ্যান্ড্রয়েড হোম স্ক্রিন উইজেট (Home Screen Widget)' : 'Android Home Screen Widget'}
+            </span>
+            <span className="text-[10px] font-bold text-teal-800 bg-teal-100/70 px-2 py-0.5 rounded-md">
+              2x1 • 2x2 • 4x2
+            </span>
+          </div>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            {isBn
+              ? 'আপনার ফোনের হোম স্ক্রিনে ফাঁকা জায়গায় চাপ দিয়ে ধরে রাখুন (Long-press) ➔ Widgets নির্বাচন করুন ➔ "MEDiTime — Daily Medicine" উইজেটটি টেনে এনে স্ক্রিনে বসান।'
+              : 'Long-press any empty space on your Android home screen ➔ Tap Widgets ➔ Select "MEDiTime — Daily Medicine" ➔ Drag to your home screen!'}
+          </p>
+          <div className="grid grid-cols-3 gap-2 text-center pt-1">
+            <div className="p-2 bg-white rounded-xl border border-slate-200">
+              <span className="block text-[10px] text-slate-400 font-bold">2x1</span>
+              <span className="block text-[11px] font-bold text-slate-700">{isBn ? 'কমপ্যাক্ট' : 'Compact'}</span>
+            </div>
+            <div className="p-2 bg-teal-50 rounded-xl border border-teal-300">
+              <span className="block text-[10px] text-teal-600 font-bold">2x2</span>
+              <span className="block text-[11px] font-bold text-teal-900">{isBn ? 'ফোকাস কার্ড' : 'Focus Card'}</span>
+            </div>
+            <div className="p-2 bg-white rounded-xl border border-slate-200">
+              <span className="block text-[10px] text-slate-400 font-bold">4x2</span>
+              <span className="block text-[11px] font-bold text-slate-700">{isBn ? 'বিস্তারিত' : 'Expanded'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Manufacturer Specific Background Restrictions Guide */}
+        {deviceStatus?.isNative && (
+          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-1.5 text-xs text-amber-950">
+            <div className="flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-700" />
+                {isBn ? 'ডিভাইস প্রস্তুতকারক নির্দেশিকা (Manufacturer Optimization)' : 'Device Background Protection'}
+              </span>
+              <button
+                type="button"
+                onClick={openManufacturerSettings}
+                className="text-[11px] font-bold text-amber-800 underline flex items-center gap-1 cursor-pointer"
+              >
+                <span>{isBn ? 'ডিভাইস সেটিংস' : 'Device Settings'}</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            </div>
+            <p className="text-[11px] text-amber-900 leading-relaxed">
+              {isBn
+                ? 'Samsung, Xiaomi, Redmi, OnePlus, Oppo বা Vivo ডিভাইসে MediTime-কে "Autostart" এবং "Never sleeping apps" তালিকায় যুক্ত রাখুন, যাতে ফোনের স্ক্রিন বন্ধ থাকলেও অ্যালার্ম কখনোই মিস না হয়।'
+                : 'For Samsung, Xiaomi, OnePlus, Oppo or Vivo: please enable Autostart and add MediTime to "Never Sleeping Apps" so background reminders are never terminated by aggressive battery cleaners.'}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* 3. ALERT MODE SELECTION */}
       <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3">
         <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
           <Volume2 className="w-4 h-4 text-teal-600" />
